@@ -16,7 +16,7 @@
     - iam_role_name: "sql-bkp-option-group"
     - iam_policy_name: "sql-bkp-option-group-policy"
     - cfn_stack_name: "cfn_stack"
-    - rds_option_group_name: "backuprestore1"
+    - rds_option_group_name: "backuprestore12"
     - rds_engine_name: "sqlserver-ex"
     - rds_engine_version: "15.00"
     - db_instance_identifier: "database-1"

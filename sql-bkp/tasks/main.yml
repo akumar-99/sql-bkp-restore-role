@@ -104,7 +104,7 @@
         \""OptionSettings\"": [
           {
             \""Name\"": \""IAM_ROLE_ARN\"",
-            \""Value\"": \""arn:aws:iam::198342745559:role/sql-bkp-option-group\"",
+            \""Value\"": \""{{ iam_role_create.stdout_lines[0] }}\"",
             \""ApplyType\"": \""DYNAMIC\"",        
             \""DataType\"": \""STRING\"",
             \""AllowedValues\"": \""string\"",
