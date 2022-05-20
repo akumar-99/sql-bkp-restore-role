@@ -1,0 +1,137 @@
+---
+# tasks file for sql-bkp
+- name: AWSCLI install
+  win_package:
+    path: https://awscli.amazonaws.com/AWSCLIV2.msi
+
+- name: Configure AWS.
+  win_shell: aws configure set {{ item.key }} {{ item.value }} --profile {{ aws_profile }}
+  no_log: True
+  with_dict:
+    aws_access_key_id: "{{ aws_access_key }}"
+    aws_secret_access_key: "{{ aws_secret_key }}"
+    region: "{{ aws_region }}"
+    format: "{{ aws_format }}"
+  changed_when: false
+
+- name: ODBC install
+  win_package:
+    path: https://go.microsoft.com/fwlink/?linkid=2187214
+    arguments: IACCEPTMSODBCSQLLICENSETERMS=YES
+
+- name: SQLCMD install
+  win_package:
+    path: https://go.microsoft.com/fwlink/?linkid=2142258
+    arguments: IACCEPTMSSQLCMDLNUTILSLICENSETERMS=YES
+
+- name: Copy assume role policy
+  win_copy:
+    src: files/role.json
+    dest: "{{ assume_role_policy_dest_path }}"
+    force: yes
+
+- name: Copy attach role policy
+  win_copy:
+    src: files/policy.json
+    dest: "{{ attach_role_policy_dest_path }}"
+    force: yes
+
+- name: sqlcmd restore script
+  win_copy:
+    content: |
+      exec msdb.dbo.rds_restore_database
+      @restore_db_name='{{ restore_db_name }}',
+      @s3_arn_to_restore_from='{{ s3_arn_to_restore_from }}';
+      go
+    dest: "{{ restore_script_dest_path }}"
+    force: yes
+
+- name: "Get AWS account id"
+  win_shell: |
+    aws sts get-caller-identity --query "Account" --output text
+  register: aws_account_id
+
+- name: "Check if role name already exists"
+  win_shell: |
+    aws iam get-role --role-name {{ iam_role_name }} --profile {{ aws_profile }}
+  register: iam_role_exists
+  ignore_errors: yes
+
+- name: "Create IAM role"
+  win_shell: |
+    aws iam create-role --role-name {{ iam_role_name }} --assume-role-policy-document file://{{ assume_role_policy_dest_path }} --profile {{ aws_profile }} --query "Role.Arn" --output text
+    aws iam wait role-exists --role-name {{ iam_role_name }} --profile {{ aws_profile }}
+  register: iam_role_create
+  when: iam_role_exists.stderr | length > 0
+
+- name: "Check if policy name already exists"
+  win_shell: |
+    aws iam get-policy --policy-arn arn:aws:iam::{{ aws_account_id.stdout_lines[0] }}:policy/{{ iam_policy_name }} --profile {{ aws_profile }}
+  register: iam_policy_exists
+  ignore_errors: yes
+
+- name: "Create IAM policy"
+  win_shell: |
+    aws iam create-policy --policy-name {{ iam_policy_name }} --policy-document file://{{ attach_role_policy_dest_path }} --profile {{ aws_profile }} --query "Policy.Arn" --output text
+    aws iam wait policy-exists --policy-arn arn:aws:iam::{{ aws_account_id.stdout_lines[0] }}:policy/{{ iam_policy_name }}
+  register: iam_policy_create
+  when: iam_policy_exists.stderr | length > 0
+
+- name: "Attach IAM policy to role"
+  win_shell: |
+    aws iam attach-role-policy --policy-arn {{ iam_policy_create.stdout_lines[0] }} --role-name {{ iam_role_name }} --profile {{ aws_profile }}
+  register: iam_role_policy_attach
+  when: iam_role_create.changed and iam_policy_create.changed
+
+- name: "Get existing option group attached to DB"
+  win_shell: |
+    aws rds describe-db-instances --db-instance-identifier {{ db_instance_identifier }} --query "DBInstances[*].OptionGroupMemberships[0].OptionGroupName" --profile {{ aws_profile }} --output text
+  register: current_attached_rds_option_group
+
+- name: "Check if RDS option group already exists"
+  win_shell: |
+    aws rds describe-option-groups --option-group-name {{ rds_option_group_name }} --profile {{ aws_profile }}
+  register: rds_option_group_exists
+  ignore_errors: yes
+
+- name: "Add RDS Option Group, Modify DB Instance"
+  win_shell: |
+    aws rds create-option-group --option-group-name {{ rds_option_group_name }} --engine-name {{rds_engine_name}} --major-engine-version {{ rds_engine_version }} --option-group-description "Backup Restoration Option Group" --profile {{ aws_profile }}
+    sleep 10
+    aws rds add-option-to-option-group --option-group-name {{ rds_option_group_name }} --apply-immediately --options '[
+      {
+        \""OptionName\"": \""SQLSERVER_BACKUP_RESTORE\"",
+        \""OptionSettings\"": [
+          {
+            \""Name\"": \""IAM_ROLE_ARN\"",
+            \""Value\"": \""arn:aws:iam::198342745559:role/sql-bkp-option-group\"",
+            \""ApplyType\"": \""DYNAMIC\"",        
+            \""DataType\"": \""STRING\"",
+            \""AllowedValues\"": \""string\"",
+            \""IsModifiable\"": true,
+            \""IsCollection\"": false
+          }
+        ]
+      }
+    ]' --profile {{ aws_profile }}
+    sleep 10
+    aws rds modify-db-instance --db-instance-identifier {{ db_instance_identifier }} --option-group-name {{ rds_option_group_name }} --apply-immediately --profile {{ aws_profile }}
+    sleep 30
+    aws rds wait db-instance-available --db-instance-identifier {{ db_instance_identifier }} --profile {{ aws_profile }}
+  when: rds_option_group_exists.stderr | length > 0
+
+- name: SQL Restore Script execution
+  win_shell: |
+    sqlcmd -S {{ mssql_host }},{{ mssql_port }} -U {{ mssql_login_user }} -P {{ mssql_login_password }} -i {{ restore_script_dest_path }}
+    sleep {{ restore_script_time }}
+  register: sql_restore_script_execute
+
+# CLEANUP
+- name: "Modify DB Instance with previous option group, delete new option group, delete IAM policy and roles"
+  win_shell: |
+    aws rds modify-db-instance --db-instance-identifier {{ db_instance_identifier }} --option-group-name {{ current_attached_rds_option_group.stdout_lines[0] }} --apply-immediately --profile {{ aws_profile }}
+    sleep 30
+    aws rds wait db-instance-available --db-instance-identifier {{ db_instance_identifier }} --profile {{ aws_profile }}
+    aws rds delete-option-group --option-group-name {{ rds_option_group_name }} --profile {{ aws_profile }}
+    aws iam delete-role --role-name {{ iam_role_name }} --profile {{ aws_profile }}
+    aws iam delete-policy --policy-arn {{ iam_policy_create.stdout_lines[0] }} --profile {{ aws_profile }}

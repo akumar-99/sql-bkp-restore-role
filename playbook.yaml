@@ -1,0 +1,26 @@
+- hosts: win1
+  roles:
+    - "sql-bkp"
+  vars:
+    - mssql_login_user: "admin"
+    - mssql_login_password: "admin1234"
+    - mssql_host: "database-1.cczdbw7z73uh.us-east-1.rds.amazonaws.com"
+    - mssql_port: "1433"
+    - aws_access_key: ""
+    - aws_secret_key: ""
+    - aws_region: "us-east-1"
+    - aws_format: "region"
+    - aws_profile: "default"
+    - assume_role_policy_dest_path: "C:\\Windows\\Temp\\role.json"
+    - attach_role_policy_dest_path: "C:\\Windows\\Temp\\policy.json"
+    - iam_role_name: "sql-bkp-option-group"
+    - iam_policy_name: "sql-bkp-option-group-policy"
+    - cfn_stack_name: "cfn_stack"
+    - rds_option_group_name: "backuprestore1"
+    - rds_engine_name: "sqlserver-ex"
+    - rds_engine_version: "15.00"
+    - db_instance_identifier: "database-1"
+    - restore_db_name: "importtest21"
+    - s3_arn_to_restore_from: "arn:aws:s3:::test-bkp-12345/pcc24_with_data.bak"
+    - restore_script_dest_path: "C:\\Windows\\Temp\\restore.sql"
+    - restore_script_time: 300 #in seconds
